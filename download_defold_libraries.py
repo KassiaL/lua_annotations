@@ -18,6 +18,12 @@ from typing import List, Dict, Optional
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+from modules.download_lua_headers import (
+    download_docs,
+    generate_lua_files,
+    get_last_defold_version,
+)
+
 
 # Popular Defold libraries with their GitHub URLs
 DEFAULT_LIBRARIES = {
@@ -447,6 +453,31 @@ def create_sample_config(output_path: Path):
     print(f"Sample configuration created at: {output_path}")
 
 
+def download_defold_api(output_dir: Path, sha: Optional[str] = None, clean: bool = False):
+    """Download Defold engine docs and generate Lua API headers."""
+    import tempfile
+
+    if clean and output_dir.exists():
+        print(f"Cleaning {output_dir}...")
+        shutil.rmtree(output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    api_dir = output_dir / "api"
+    if api_dir.exists():
+        print(f"Cleaning {api_dir}...")
+        shutil.rmtree(api_dir)
+
+    if sha is None:
+        _, sha = get_last_defold_version()
+
+    with tempfile.TemporaryDirectory(prefix="defold-api-docs-") as temp_dir:
+        doc_dir = download_docs(sha, Path(temp_dir))
+        generate_lua_files(doc_dir, api_dir)
+
+    print(f"\n✓ Defold API headers saved to: {api_dir.absolute()}")
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -456,6 +487,9 @@ def main():
 Examples:
   # Download default libraries
   python download_defold_libraries.py
+
+  # Download only Defold engine API headers
+  python download_defold_libraries.py --defold-api-only
 
   # Download to custom directory
   python download_defold_libraries.py -o ~/defold-libs
@@ -518,6 +552,17 @@ Examples:
         help="Create a sample configuration file and exit",
     )
 
+    parser.add_argument(
+        "--defold-api-only",
+        action="store_true",
+        help="Download only Defold engine API headers and skip default libraries",
+    )
+
+    parser.add_argument(
+        "--defold-sha",
+        help="Defold archive SHA to use for API headers (default: latest stable)",
+    )
+
     args = parser.parse_args()
 
     # Handle --list
@@ -532,6 +577,10 @@ Examples:
     # Handle --create-config
     if args.create_config:
         create_sample_config(args.create_config)
+        sys.exit(0)
+
+    if args.defold_api_only:
+        download_defold_api(args.output, sha=args.defold_sha, clean=args.clean)
         sys.exit(0)
 
     # Determine which libraries to download
