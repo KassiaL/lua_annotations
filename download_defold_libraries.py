@@ -7,6 +7,7 @@ their Lua files into a organized directory structure for IDE support.
 """
 
 import argparse
+import fnmatch
 import json
 import os
 import shutil
@@ -43,6 +44,11 @@ DEFAULT_LIBRARIES = {
     "defold-tweener": {
         "url": "https://github.com/Insality/defold-tweener/archive/refs/tags/5.zip",
         "description": "Tweener library for Defold",
+        "exclude_patterns": [
+            "annotations*",
+            "druid",
+        ],
+        "output_root": "tweener",
     },
     "defsave": {
         "url": "https://github.com/subsoap/defsave/archive/master.zip",
@@ -60,10 +66,6 @@ DEFAULT_LIBRARIES = {
         "url": "https://github.com/defold/extension-websocket/archive/master.zip",
         "description": "WebSocket extension for Defold",
     },
-    "gamepush":{
-        "url": "https://github.com/megalanthus/defold-gamepush/archive/master.zip",
-        "description": "GamePush SDK for Defold",
-    },
     "box2d":{
         "url": "https://github.com/d954mas/defold-box2d/archive/master.zip",
         "description": "Box2D physics engine for Defold",
@@ -79,9 +81,24 @@ DEFAULT_LIBRARIES = {
     "panthera":{
         "url": "https://github.com/Insality/panthera/archive/refs/tags/runtime.7.zip",
         "description": "Panthera library for Defold",
+        "exclude_patterns": [
+            "adapters",
+            "panthera_*",
+        ],
     },
 }
 
+
+GLOBAL_EXCLUDE_PATTERNS = [
+    "debugger",
+    "spine_tester",
+    "luacov",
+    "main*",
+    "example*",
+    "header*",
+    "doc*",
+    "libs*",
+]
 
 class DefoldLibraryDownloader:
     """Download and extract Defold libraries."""
@@ -100,7 +117,62 @@ class DefoldLibraryDownloader:
             "downloaded": 0,
             "failed": 0,
             "lua_files": 0,
+            "skipped_libraries": 0,
+            "skipped_files": 0,
         }
+
+    @staticmethod
+    def _matches_pattern(value: str, pattern: str) -> bool:
+        """Match shell-style patterns against a path component or file stem."""
+        value_lower = value.lower()
+        pattern_lower = pattern.lower()
+
+        if fnmatch.fnmatchcase(value_lower, pattern_lower):
+            return True
+
+        stem = Path(value_lower).stem
+        return stem != value_lower and fnmatch.fnmatchcase(stem, pattern_lower)
+
+    @classmethod
+    def _matches_any_pattern(cls, value: str, patterns: List[str]) -> bool:
+        return any(cls._matches_pattern(value, pattern) for pattern in patterns)
+
+    def is_library_excluded(self, library_name: str) -> bool:
+        """Return True when the whole library should be skipped."""
+        return self._matches_any_pattern(library_name, GLOBAL_EXCLUDE_PATTERNS)
+
+    def is_path_excluded(
+        self,
+        library_name: str,
+        relative_path: Path,
+        library_exclude_patterns: Optional[List[str]] = None,
+        library_output_root: Optional[str] = None,
+    ) -> bool:
+        """
+        Return True when a file belongs to an excluded direct child.
+
+        Global exclusions apply to direct children of output_dir. Library-specific
+        exclusions additionally apply to direct children of that library's root.
+        """
+        parts = relative_path.parts
+        if not parts:
+            return False
+
+        if self._matches_any_pattern(parts[0], GLOBAL_EXCLUDE_PATTERNS):
+            return True
+
+        library_patterns = library_exclude_patterns or []
+        if not library_patterns:
+            return False
+
+        if self._matches_any_pattern(parts[0], library_patterns):
+            return True
+
+        library_root = library_output_root or library_name
+        if parts[0] == library_root and len(parts) > 1:
+            return self._matches_any_pattern(parts[1], library_patterns)
+
+        return False
 
     def clean_output_dir(self):
         """Clean the output directory."""
@@ -137,7 +209,11 @@ class DefoldLibraryDownloader:
             raise URLError(f"HTTP Error {e.code}: {e.reason}")
 
     def extract_lua_files(
-        self, zip_data: bytes, library_name: str
+        self,
+        zip_data: bytes,
+        library_name: str,
+        library_exclude_patterns: Optional[List[str]] = None,
+        library_output_root: Optional[str] = None,
     ) -> tuple[int, List[str]]:
         """
         Extract Lua files from ZIP archive.
@@ -170,8 +246,6 @@ class DefoldLibraryDownloader:
 
                 # Extract the file
                 try:
-                    file_data = zip_file.read(entry)
-
                     # Get relative path (remove only the GitHub archive root directory)
                     parts = Path(entry).parts
                     if len(parts) > 1:
@@ -179,6 +253,17 @@ class DefoldLibraryDownloader:
                         relative_path = Path(*parts[1:])
                     else:
                         relative_path = Path(entry)
+
+                    if self.is_path_excluded(
+                        library_name,
+                        relative_path,
+                        library_exclude_patterns,
+                        library_output_root,
+                    ):
+                        self.stats["skipped_files"] += 1
+                        continue
+
+                    file_data = zip_file.read(entry)
 
                     # Create target path directly in output_dir
                     target_path = self.output_dir / relative_path
@@ -196,7 +281,14 @@ class DefoldLibraryDownloader:
 
         return lua_count, extracted_files
 
-    def download_library(self, name: str, url: str, description: str = "") -> bool:
+    def download_library(
+        self,
+        name: str,
+        url: str,
+        description: str = "",
+        exclude_patterns: Optional[List[str]] = None,
+        output_root: Optional[str] = None,
+    ) -> bool:
         """
         Download and extract a single library.
 
@@ -215,12 +307,22 @@ class DefoldLibraryDownloader:
         print(f"{'=' * 70}")
 
         try:
+            if self.is_library_excluded(name):
+                print(f"  - Skipped by library exclusion")
+                self.stats["skipped_libraries"] += 1
+                return True
+
             # Download
             zip_data = self.download_file(url)
             print(f"  ✓ Downloaded {len(zip_data):,} bytes")
 
             # Extract
-            lua_count, extracted_files = self.extract_lua_files(zip_data, name)
+            lua_count, extracted_files = self.extract_lua_files(
+                zip_data,
+                name,
+                exclude_patterns,
+                output_root,
+            )
 
             if lua_count == 0:
                 print(f"  ⚠ No Lua files found in {name}")
@@ -271,12 +373,20 @@ class DefoldLibraryDownloader:
         for name, config in libraries.items():
             url = config.get("url", "")
             description = config.get("description", "")
+            exclude_patterns = config.get("exclude_patterns")
+            output_root = config.get("output_root")
 
             if not url:
                 print(f"⚠ Skipping {name}: No URL provided")
                 continue
 
-            self.download_library(name, url, description)
+            self.download_library(
+                name,
+                url,
+                description,
+                exclude_patterns,
+                output_root,
+            )
 
         # Print summary
         print(f"\n{'=' * 70}")
@@ -284,6 +394,8 @@ class DefoldLibraryDownloader:
         print(f"{'=' * 70}")
         print(f"✓ Downloaded:  {self.stats['downloaded']}/{total}")
         print(f"✗ Failed:      {self.stats['failed']}/{total}")
+        print(f"- Skipped:     {self.stats['skipped_libraries']} libraries")
+        print(f"- Excluded:    {self.stats['skipped_files']} Lua files")
         print(f"📄 Lua files:  {self.stats['lua_files']}")
         print(f"📁 Output dir: {self.output_dir.absolute()}")
         print(f"{'=' * 70}\n")
