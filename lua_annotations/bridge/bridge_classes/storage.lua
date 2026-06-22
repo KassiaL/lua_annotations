@@ -1,0 +1,6 @@
+---@class storage
+---@field is_supported fun(): boolean
+---@field set fun(key: string, value: string)
+---@field get fun(key: string, callback: fun(value: string))
+---@field set_local fun(key: string, value: any)
+---@field get_local fun(key: string, callback: fun(any: any))
