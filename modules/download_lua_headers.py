@@ -102,6 +102,9 @@ class LuaBuilder:
         "dmGameSystem_doc.json",
         "dmDDF_doc.json",
     }
+    IGNORE_OUTPUT_FILES = {
+        "string.lua",
+    }
 
     BASE_LUA = """---@class vector3
 ---@field x number
@@ -375,6 +378,10 @@ def generate_lua_files(doc_dir: Path, api_dir: Path):
             # Create output filename
             output_name = name.replace(" ", "_").lower() + ".lua"
             output_path = api_dir / output_name
+
+            if output_name in builder.IGNORE_OUTPUT_FILES:
+                print(f"Skipping {output_name} (ignored output)")
+                continue
 
             # Check if file already exists and has more content
             should_write = True
