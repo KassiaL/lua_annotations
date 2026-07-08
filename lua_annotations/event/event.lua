@@ -1,6 +1,7 @@
-local USE_XPCALL = sys.get_config_int("event.use_xpcall", 0) == 1
-local USE_PCALL = sys.get_config_int("event.use_pcall", 1) == 1 and not USE_XPCALL
-local USE_CONTEXT_CHANGE = USE_PCALL or USE_XPCALL
+local event_mode = sys.get_config_string("event.event_mode", "pcall")
+local USE_XPCALL = event_mode == "xpcall"
+local USE_PCALL = event_mode == "pcall"
+local USE_NONE = event_mode == "none"
 
 ---Array of next items: { callback, callback_context, script_context }
 ---@class event.callback_data: table
@@ -37,7 +38,9 @@ local empty_logger = {
 	debug = EMPTY_FUNCTION,
 	info = EMPTY_FUNCTION,
 	warn = EMPTY_FUNCTION,
-	error = EMPTY_FUNCTION,
+	error = function(_, message)
+		event_context_manager.log_error(message)
+	end,
 }
 
 ---@type event.logger
@@ -46,7 +49,7 @@ local logger = {
 	debug = EMPTY_FUNCTION,
 	info = EMPTY_FUNCTION,
 	warn = function(_, message)
-		pprint("WARN:", message)
+		print("WARN:", message)
 	end,
 	error = function(_, message)
 		event_context_manager.log_error(message)
@@ -67,7 +70,7 @@ end
 function M.set_mode(mode)
 	USE_PCALL = mode == "pcall"
 	USE_XPCALL = mode == "xpcall"
-	USE_CONTEXT_CHANGE = USE_PCALL or USE_XPCALL
+	USE_NONE = mode == "none"
 end
 
 
@@ -117,9 +120,14 @@ end
 function M:subscribe(callback, callback_context)
 	assert(callback, "A function must be passed to subscribe to an event")
 
-	-- If callback is an event, subscribe to it and return
 	if M.is_event(callback) then
-		return self:subscribe(callback.trigger, callback)
+		if callback_context then
+			return self:subscribe(function(context, ...)
+				return callback:trigger(context, ...)
+			end, callback_context)
+		else
+			return self:subscribe(callback.trigger, callback)
+		end
 	end
 
 	---@cast callback function
@@ -225,7 +233,7 @@ function M:trigger(...)
 		local event_script_context = callback[3]
 
 		-- Set context for the callback
-		if USE_CONTEXT_CHANGE and current_script_context ~= event_script_context then
+		if current_script_context ~= event_script_context then
 			set_context(event_script_context)
 		end
 
@@ -234,26 +242,24 @@ function M:trigger(...)
 		if event_callback_context then
 			if USE_PCALL then
 				ok, result_or_error = pcall(event_callback, event_callback_context, ...)
-			else
+			elseif USE_XPCALL or USE_NONE then
 				local args = { event_callback_context }
 				local n = select("#", ...)
 				for i = 1, n do
 					args[i+1] = select(i, ...)
 				end
 
-				if USE_XPCALL then
-					ok, result_or_error = xpcall(function()
-						return event_callback(unpack(args))
-					end, event_error_handler)
-				else
-					result_or_error = event_callback(unpack(args))
-					ok = true
-				end
+				ok, result_or_error = xpcall(function()
+					return event_callback(unpack(args, 1, n + 1))
+				end, event_error_handler)
+			else
+				result_or_error = event_callback(event_callback_context, ...)
+				ok = true
 			end
 		else
 			if USE_PCALL then
 				ok, result_or_error = pcall(event_callback, ...)
-			elseif USE_XPCALL then
+			elseif USE_XPCALL or USE_NONE then
 				local args = {}
 				local n = select("#", ...)
 				for i = 1, n do
@@ -261,7 +267,7 @@ function M:trigger(...)
 				end
 
 				ok, result_or_error = xpcall(function()
-					return event_callback(unpack(args))
+					return event_callback(unpack(args, 1, n))
 				end, event_error_handler)
 			else
 				result_or_error = event_callback(...)
@@ -270,15 +276,19 @@ function M:trigger(...)
 		end
 
 		-- Restore context
-		if USE_CONTEXT_CHANGE and current_script_context ~= event_script_context then
+		if current_script_context ~= event_script_context then
 			set_context(current_script_context)
 		end
 
 		-- Handle errors
 		if not ok then
+			if USE_NONE then
+				error(result_or_error, 2)
+			end
+
 			local caller_info = debug.getinfo(2)
 			local place = caller_info.short_src .. ":" .. caller_info.currentline
-			logger:error("Error in trigger event: " .. place)
+			logger:error("Error from trigger event here: " .. place, 2)
 			logger:error(USE_XPCALL and result_or_error or debug.traceback(result_or_error, 2))
 		end
 

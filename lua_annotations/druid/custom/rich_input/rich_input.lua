@@ -16,7 +16,7 @@ local M = component.create("druid.rich_input")
 local DOUBLE_CLICK_TIME = 0.35
 
 local function animate_cursor(self)
-	gui.cancel_animation(self.cursor_text, "color.w")
+	gui.cancel_animations(self.cursor_text, "color.w")
 	gui.set_alpha(self.cursor_text, 1)
 	gui.animate(self.cursor_text, "color.w", 0, gui.EASING_INSINE, 0.8, 0, nil, gui.PLAYBACK_LOOP_PINGPONG)
 end
@@ -73,16 +73,23 @@ local function on_select(self)
 
 	animate_cursor(self)
 	self.drag:set_enabled(true)
+
+	-- We want to catch events here first
+	self:set_input_priority(const.PRIORITY_INPUT_MAX, true)
+	self.input:set_input_priority(const.PRIORITY_INPUT_MAX - 1, true)
 end
 
 
 local function on_unselect(self)
-	gui.cancel_animation(self.cursor, gui.PROP_COLOR)
+	gui.cancel_animations(self.cursor, gui.PROP_COLOR)
 	gui.set_enabled(self.cursor, false)
 	gui.set_enabled(self.input.button.node, self.is_button_input_enabled)
 	gui.set_enabled(self.placeholder.node, true and #self.input:get_text() == 0)
 
 	self.drag:set_enabled(false)
+
+	self:reset_input_priority()
+	self.input:reset_input_priority()
 end
 
 

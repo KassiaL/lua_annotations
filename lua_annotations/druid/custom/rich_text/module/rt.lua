@@ -117,16 +117,22 @@ end
 ---@return druid.rich_text.metrics
 local function get_image_metrics(word, settings)
 	local node = word.node
+	if word.image.width or word.image.height then
+		gui.set_size_mode(node, gui.SIZE_MODE_MANUAL)
+	else
+		gui.set_size_mode(node, gui.SIZE_MODE_AUTO)
+	end
 	gui.set_texture(node, word.image.texture)
-	gui.play_flipbook(node, word.image.anim)
+	gui.play_flipbook(node, hash(word.image.anim))
+
 	local node_size = gui.get_size(node)
 	local aspect = node_size.x / node_size.y
 	node_size.x = word.image.width or node_size.x
-	node_size.y = word.image.height or (node_size.x / aspect)
+	node_size.y = word.image.height or node_size.y
 
 	return {
-		width = node_size.x * word.relative_scale * settings.scale.x * settings.adjust_scale,
-		height = node_size.y * word.relative_scale * settings.scale.y * settings.adjust_scale,
+		width = node_size.x * word.relative_scale * settings.adjust_scale,
+		height = node_size.y * word.relative_scale * settings.adjust_scale,
 		node_size = node_size,
 	}
 end
@@ -140,15 +146,23 @@ local function measure_node(word, settings, previous_word)
 	do -- Clone node if required
 		local node
 		if word.image then
-			node = word.node or gui.new_box_node(vmath.vector3(0), vmath.vector3(word.image.width, word.image.height, 0))
+			local size = vmath.vector3(
+				word.image.width or 100,
+				word.image.height or 100,
+				0
+			)
+			node = word.node or gui.new_box_node(vmath.vector3(0), size)
 		else
 			node = word.node or gui.clone(settings.text_prefab)
 		end
 		word.node = node
 	end
 
-	local metrics = word.image and get_image_metrics(word, settings) or get_text_metrics(word, previous_word, settings)
-	return metrics
+	if word.image then
+		return get_image_metrics(word, settings)
+	else
+		return get_text_metrics(word, previous_word, settings)
+	end
 end
 
 
@@ -181,6 +195,7 @@ function M.create(text, settings, style)
 		shadow = settings.shadow,
 		outline = settings.outline,
 		font = gui.get_font(settings.text_prefab),
+		split_to_characters = settings.split_to_characters,
 		-- Image params
 		---@type druid.rich_text.word.image
 		image = nil,
@@ -208,24 +223,47 @@ end
 ---@param settings druid.rich_text.settings
 function M._fill_properties(word, metrics, settings)
 	word.metrics = metrics
-	word.position = vmath.vector3(0)
+
+	word.position = word.position or vmath.vector3(0)
+	word.position.x = 0
+	word.position.y = 0
+	word.position.z = 0
 
 	if word.image then
-		-- Image properties
-		word.scale = vmath.vector3(word.relative_scale * settings.adjust_scale)
 		word.pivot = gui.PIVOT_CENTER
 		word.size = metrics.node_size
-		word.offset = vmath.vector3(0, 0, 0)
 		if word.image.width then
 			word.size.y = word.image.height or (word.size.y * word.image.width / word.size.x)
 			word.size.x = word.image.width
 		end
+		local image_scale = word.relative_scale * settings.adjust_scale
+		word.scale = word.scale or vmath.vector3(image_scale)
+		word.scale.x = image_scale
+		word.scale.y = image_scale
+		word.scale.z = image_scale
+
+		word.offset = word.offset or vmath.vector3(0)
+		word.offset.x = 0
+		word.offset.y = 0
+		word.offset.z = 0
 	else
-		-- Text properties
-		word.scale = settings.scale * word.relative_scale * settings.adjust_scale
-		word.pivot = gui.PIVOT_SW -- With this pivot adjustments works more correctly than with other pivots
-		word.size = vmath.vector3(metrics.width, metrics.height, 0)
-		word.offset = vmath.vector3(metrics.offset_x, metrics.offset_y, 0)
+		word.pivot = gui.PIVOT_SW
+		local text_scale = word.relative_scale * settings.adjust_scale
+
+		word.scale = word.scale or vmath.vector3(settings.scale * text_scale)
+		word.scale.x = settings.scale.x * text_scale
+		word.scale.y = settings.scale.y * text_scale
+		word.scale.z = settings.scale.z * text_scale
+
+		word.size = word.size or vmath.vector3(metrics.width, metrics.height, 0)
+		word.size.x = metrics.width
+		word.size.y = metrics.height
+		word.size.z = 0
+
+		word.offset = word.offset or vmath.vector3(metrics.offset_x, metrics.offset_y, 0)
+		word.offset.x = metrics.offset_x
+		word.offset.y = metrics.offset_y
+		word.offset.z = 0
 	end
 end
 
@@ -382,6 +420,18 @@ function M._get_lines_metrics(lines, settings)
 			end
 		end
 
+		-- Exclude trailing space of last word from line width (parser adds "word " per token)
+		local last = line[#line]
+		if last and not last.image then
+			local trimmed = last.text:match("^(.-)%s+$")
+			if trimmed then
+				local font_resource = gui.get_font_resource(last.font)
+				local scale_x = last.relative_scale * settings.scale.x * settings.adjust_scale
+				local space_w = resource.get_text_metrics(font_resource, last.text).width - resource.get_text_metrics(font_resource, trimmed).width
+				width = width - space_w * scale_x
+			end
+		end
+
 		if line_index > 1 then
 			height = height * settings.text_leading
 		end
@@ -420,6 +470,7 @@ function M._update_nodes(lines, settings)
 				gui.set_texture(node, word.image.texture)
 				gui.play_flipbook(node, hash(word.image.anim))
 				gui.set_color(node, word.color or COLOR_WHITE)
+				gui.set_inherit_alpha(node, true)
 			else
 				node = word.node or gui.clone(settings.text_prefab)
 				gui.set_outline(node, word.outline)

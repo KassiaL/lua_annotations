@@ -28,7 +28,7 @@ from modules.download_lua_headers import (
 # Popular Defold libraries with their GitHub URLs
 DEFAULT_LIBRARIES = {
     "druid": {
-        "url": "https://github.com/Insality/druid/archive/refs/tags/1.1.4.zip",
+        "url": "https://github.com/Insality/druid/archive/refs/tags/1.2.5.zip",
         "description": "Defold GUI library with rich component system",
     },
     "monarch": {
@@ -44,7 +44,7 @@ DEFAULT_LIBRARIES = {
         "description": "Extra OS functions for desktop platforms",
     },
     "defold-event": {
-        "url": "https://github.com/Insality/defold-event/archive/refs/tags/12.zip",
+        "url": "https://github.com/Insality/defold-event/archive/refs/tags/14.zip",
         "description": "Event system for Defold",
     },
     "defold-tweener": {

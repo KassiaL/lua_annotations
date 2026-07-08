@@ -1,5 +1,8 @@
+local helper = require("druid.helper")
 local component = require("druid.component")
 local rich_text = require("druid.custom.rich_text.module.rt")
+
+local VECTOR3_ONE = vmath.vector3(1)
 
 ---@class druid.rich_text.settings
 ---@field parent node
@@ -13,6 +16,7 @@ local rich_text = require("druid.custom.rich_text.module.rt")
 ---@field image_pixel_grid_snap boolean
 ---@field combine_words boolean
 ---@field default_animation string
+---@field split_by_character boolean
 ---@field text_prefab node
 ---@field adjust_scale number
 ---@field default_texture string
@@ -33,7 +37,7 @@ local rich_text = require("druid.custom.rich_text.module.rt")
 ---@field scale vector3
 ---@field size vector3
 ---@field metrics druid.rich_text.metrics
----@field pivot userdata
+---@field pivot constant
 ---@field text string
 ---@field shadow vector4
 ---@field outline vector4
@@ -50,7 +54,6 @@ local rich_text = require("druid.custom.rich_text.module.rt")
 ---@field height number
 
 ---@class druid.rich_text.style
----@field COLORS table<string, vector4>
 ---@field ADJUST_STEPS number
 ---@field ADJUST_SCALE_DELTA number
 
@@ -68,10 +71,12 @@ local rich_text = require("druid.custom.rich_text.module.rt")
 
 ---The component that handles a rich text display, allows to custom color, size, font, etc. of the parts of the text
 ---@class druid.rich_text: druid.component
----@field root node The root node of the rich text
+---@field root node The root text node of the rich text
 ---@field text_prefab node The text prefab node
 ---@field private _last_value string The last value of the rich text
 ---@field private _settings table The settings of the rich text
+---@field private _split_to_characters boolean The split to characters flag
+---@field private _anchor vector3|nil Anchor position when pivot is set (keeps content in place on resize)
 local M = component.create("rich_text")
 
 
@@ -81,22 +86,21 @@ function M:init(text_node, value)
 	self.root = self:get_node(text_node)
 	self.text_prefab = self.root
 
-	self._last_value = value or gui.get_text(self.text_prefab)
+	self._last_value = value or gui.get_text(self.text_prefab) or ""
 	self._settings = self:_create_settings()
+	self._split_to_characters = false
 
 	gui.set_text(self.root, "")
 
-	if value then
-		self:set_text(value)
-	end
+	self:set_text(self._last_value)
 end
 
 
 ---@private
 function M:on_layout_change()
-	if self._last_value then
-		self:set_text(self._last_value)
-	end
+	gui.set_text(self.root, "")
+	self._settings = self:_create_settings()
+	self:set_text(self._last_value)
 end
 
 
@@ -104,7 +108,6 @@ end
 ---@param style druid.rich_text.style
 function M:on_style_change(style)
 	self.style = {
-		COLORS = style.COLORS or {},
 		ADJUST_STEPS = style.ADJUST_STEPS or 20,
 		ADJUST_SCALE_DELTA = style.ADJUST_SCALE_DELTA or 0.02,
 	}
@@ -147,6 +150,22 @@ function M:set_text(text)
 	self:clear()
 	self._last_value = text
 
+	if self._anchor then
+		local size = gui.get_size(self.root)
+		local pivot_offset = helper.get_pivot_offset(gui.get_pivot(self.root))
+		gui.set_position(self.root, vmath.vector3(
+			self._anchor.x + size.x * pivot_offset.x,
+			self._anchor.y + size.y * pivot_offset.y,
+			self._anchor.z
+		))
+	end
+
+	self._settings.adjust_scale = 1
+	local root_size = gui.get_size(self.root)
+	self._settings.width = root_size.x
+	self._settings.height = root_size.y
+	self._settings.split_to_characters = self._split_to_characters
+
 	local words, settings, line_metrics = rich_text.create(text, self._settings, self.style)
 	line_metrics = rich_text.adjust_to_area(words, settings, line_metrics, self.style)
 
@@ -161,6 +180,30 @@ end
 ---@return string text The current text of the rich text
 function M:get_text()
 	return self._last_value
+end
+
+
+---Set pivot and keep the content in place (anchor). After this, resizing the root will keep the anchor fixed.
+---@param pivot number GUI pivot constant
+---@return druid.rich_text self
+function M:set_pivot(pivot)
+	local pos = gui.get_position(self.root)
+	local size = gui.get_size(self.root)
+	local pivot_offset = helper.get_pivot_offset(gui.get_pivot(self.root))
+	self._anchor = vmath.vector3(
+		pos.x - size.x * pivot_offset.x,
+		pos.y - size.y * pivot_offset.y,
+		pos.z
+	)
+	gui.set_pivot(self.root, pivot)
+	pivot_offset = helper.get_pivot_offset(pivot)
+	gui.set_position(self.root, vmath.vector3(
+		self._anchor.x + size.x * pivot_offset.x,
+		self._anchor.y + size.y * pivot_offset.y,
+		pos.z
+	))
+	self:set_text(self._last_value)
+	return self
 end
 
 
@@ -179,6 +222,8 @@ function M:clear()
 		self._words = nil
 	end
 	self._last_value = nil
+
+	return self
 end
 
 
@@ -191,6 +236,15 @@ function M:tagged(tag)
 	end
 
 	return rich_text.tagged(self._words, tag)
+end
+
+
+---Set if the rich text should split to characters, not words
+---@param value boolean
+---@return druid.rich_text self
+function M:set_split_to_characters(value)
+	self._split_to_characters = value
+	return self
 end
 
 
@@ -220,7 +274,7 @@ function M:_create_settings()
 	root_size.x = root_size.x * scale.x
 	root_size.y = root_size.y * scale.y
 	gui.set_size(self.root, root_size)
-	gui.set_scale(self.root, vmath.vector3(1))
+	gui.set_scale(self.root, VECTOR3_ONE)
 
 	return {
 		-- General settings
@@ -239,10 +293,31 @@ function M:_create_settings()
 		outline = gui.get_outline(self.root),
 		text_leading = gui.get_leading(self.root),
 		is_multiline = gui.get_line_break(self.root),
+		split_to_characters = false,
 
 		-- Image settings
 		image_pixel_grid_snap = false, -- disabled now
 	}
+end
+
+
+---Set the width of the rich text, not affects the size of current spawned words
+---@param width number
+---@return druid.rich_text self
+function M:set_width(width)
+	gui.set(self.root, "size.x", width)
+	self._settings.width = width
+	return self
+end
+
+
+---Set the height of the rich text, not affects the size of current spawned words
+---@param height number
+---@return druid.rich_text self
+function M:set_height(height)
+	gui.set(self.root, "size.y", height)
+	self._settings.height = height
+	return self
 end
 
 

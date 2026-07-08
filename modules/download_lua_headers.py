@@ -9,12 +9,11 @@ import os
 import re
 import sys
 import zipfile
-from io import BytesIO
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from urllib.request import urlopen
 from html.parser import HTMLParser
-from io import StringIO
+from io import BytesIO, StringIO
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.request import urlopen
 
 
 class HTMLToPlainText(HTMLParser):
@@ -102,9 +101,7 @@ class LuaBuilder:
         "dmGameSystem_doc.json",
         "dmDDF_doc.json",
     }
-    IGNORE_OUTPUT_FILES = {
-        "string.lua",
-    }
+    IGNORE_OUTPUT_FILES = {"string.lua", "math.lua"}
 
     BASE_LUA = """---@class vector3
 ---@field x number

@@ -4,6 +4,7 @@ local component = require("druid.component")
 
 ---@class druid.hotkey.style
 ---@field MODIFICATORS string[]|hash[] The list of action_id as hotkey modificators
+---@field MODIFICATOR_RELEASE_TIME number Time in seconds to keep modificator active after release
 
 ---Druid component to manage hotkeys and trigger callbacks when hotkeys are pressed.
 ---
@@ -22,7 +23,8 @@ local component = require("druid.component")
 ---@field on_hotkey_released event fun(self, context, callback_argument) The event triggered when a hotkey is released
 ---@field style druid.hotkey.style The style of the hotkey component
 ---@field private _hotkeys table The list of hotkeys
----@field private _modificators table The list of modificators
+---@field private _modificators table<hash, boolean> The list of modificators
+---@field private _modificator_released_at table<hash, number> The release timestamp for modificators
 ---@field private _node node|nil The node to bind the hotkey to
 local M = component.create("hotkey")
 
@@ -36,6 +38,7 @@ function M:init(keys, callback, callback_argument)
 
 	self._hotkeys = {}
 	self._modificators = {}
+	self._modificator_released_at = {}
 	self._node = nil
 	self.on_hotkey_pressed = event.create()
 	self.on_hotkey_released = event.create(callback)
@@ -51,6 +54,7 @@ end
 function M:on_style_change(style)
 	self.style = {
 		MODIFICATORS = style.MODIFICATORS or {},
+		MODIFICATOR_RELEASE_TIME = style.MODIFICATOR_RELEASE_TIME or 0.12,
 	}
 
 	for index = 1, #style.MODIFICATORS do
@@ -120,9 +124,33 @@ end
 
 ---@private
 function M:on_focus_gained()
-	for k, v in pairs(self._modificators) do
+	for k, _ in pairs(self._modificators) do
 		self._modificators[k] = false
+		self._modificator_released_at[k] = nil
 	end
+end
+
+
+---@private
+---@param modificator hash
+---@param time number The current time
+---@return boolean
+function M:_is_modificator_active(modificator, time)
+	if self._modificators[modificator] then
+		return true
+	end
+
+	local released_at = self._modificator_released_at[modificator]
+	if not released_at then
+		return false
+	end
+
+	if time - released_at < self.style.MODIFICATOR_RELEASE_TIME then
+		return true
+	end
+
+	self._modificator_released_at[modificator] = nil
+	return false
 end
 
 
@@ -131,6 +159,8 @@ end
 ---@param action action The action
 ---@return boolean is_consume True if the action is consumed
 function M:on_input(action_id, action)
+	local time = socket.gettime()
+
 	if not action_id then
 		return false
 	end
@@ -141,6 +171,7 @@ function M:on_input(action_id, action)
 
 	if self._modificators[action_id] ~= nil and action.pressed then
 		self._modificators[action_id] = true
+		self._modificator_released_at[action_id] = nil
 	end
 
 	for index = 1, #self._hotkeys do
@@ -151,14 +182,19 @@ function M:on_input(action_id, action)
 			local is_modificator_ok = true
 			local is_consume = not not (hotkey.key)
 
-			-- Check only required modificators pressed
-			if hotkey.key and #hotkey.modificators > 0 then
+			if hotkey.key then
 				for i = 1, #self.style.MODIFICATORS do
 					local mod = self.style.MODIFICATORS[i]
-					if helper.contains(hotkey.modificators, mod) and self._modificators[mod] == false then
-						is_modificator_ok = false
-					end
-					if not helper.contains(hotkey.modificators, mod) and self._modificators[mod] == true then
+					---@cast mod hash
+
+					if #hotkey.modificators > 0 then
+						if helper.contains(hotkey.modificators, mod) and not self:_is_modificator_active(mod, time) then
+							is_modificator_ok = false
+						end
+						if not helper.contains(hotkey.modificators, mod) and self:_is_modificator_active(mod, time) then
+							is_modificator_ok = false
+						end
+					elseif self:_is_modificator_active(mod, time) then
 						is_modificator_ok = false
 					end
 				end
@@ -182,6 +218,7 @@ function M:on_input(action_id, action)
 
 	if self._modificators[action_id] ~= nil and action.released then
 		self._modificators[action_id] = false
+		self._modificator_released_at[action_id] = time
 	end
 
 	return false
