@@ -1,3 +1,0 @@
----@class remote_config
----@field get fun(callback: fun(data: string | nil))
----@field is_supported fun(): boolean
